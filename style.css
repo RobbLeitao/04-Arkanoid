@@ -1,0 +1,21 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #111;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#game {
+  /* Mantiene la proporción 3:4 (480×640) y cabe en la ventana */
+  height: min(100vh, 100vw * 4 / 3);
+  aspect-ratio: 3 / 4;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #000;
+}
