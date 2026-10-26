@@ -24,6 +24,8 @@ let lastTime = 0;
 const MAX_BOUNCE_ANGLE = 60 * Math.PI / 180;  // máximo respecto a la vertical
 const MIN_VERTICAL = 0.2;                     // |vy| mínimo como fracción de la velocidad
 
+const HEART_SIZE = 20;
+
 const SCORE_COLOR = 10;
 const SCORE_GRAY = 30;
 
@@ -32,6 +34,35 @@ const BLOCK_H = 16;
 const BLOCK_COLS = 15;
 const BLOCKS_TOP = 48;  // deja sitio para el HUD
 const LEVEL_ROWS = [ 'gray', 'red', 'yellow', 'cyan', 'magenta', 'green' ];  // de arriba abajo
+
+// Web Audio: los sonidos se decodifican una vez y se lanzan al instante, sin la latencia de <audio>
+const SOUND_BUFFERS = {};
+let audioCtx = null;
+
+// Los navegadores bloquean el audio hasta la primera interacción del usuario
+function unlockAudio() {
+  if ( audioCtx ) {
+    if ( audioCtx.state === 'suspended' ) audioCtx.resume();
+    return;
+  }
+  audioCtx = new AudioContext();
+  for ( const name in SOUND_DATA ) {
+    const bytes = Uint8Array.from( atob( SOUND_DATA[ name ] ), c => c.charCodeAt( 0 ) );
+    audioCtx.decodeAudioData( bytes.buffer ).then( buf => { SOUND_BUFFERS[ name ] = buf; } );
+  }
+}
+window.addEventListener( 'mousedown', unlockAudio );
+window.addEventListener( 'keydown', unlockAudio );
+
+// Cada reproducción es un nodo nuevo, así que los sonidos pueden solaparse sin cortarse
+function playSound( name ) {
+  const buf = SOUND_BUFFERS[ name ];
+  if ( !buf ) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect( audioCtx.destination );
+  src.start();
+}
 
 // El juego no arranca hasta que el spritesheet está cargado
 loadSpritesheet( start );
@@ -49,7 +80,14 @@ function loop( now ) {
   requestAnimationFrame( loop );
 }
 
+// Reloj del juego en ms: no avanza en pausa, para que las explosiones se congelen
+let gameTime = 0;
+
 function update( dt ) {
+  if ( state.screen !== 'paused' ) {
+    gameTime += dt * FRAME_MS;
+    state.explosions = state.explosions.filter( ex => gameTime - ex.start < EXPLOSION_DURATION );
+  }
   if ( state.screen === 'ready' || state.screen === 'playing' ) updatePaddle( dt );
   if ( state.screen === 'ready' ) stickBallToPaddle();
   if ( state.screen === 'playing' ) updateBall( dt );
@@ -80,13 +118,16 @@ function updateBall( dt ) {
   if ( b.x - b.r < 0 ) {
     b.x = b.r;
     b.vx = Math.abs( b.vx );
+    playSound( 'bounce' );
   } else if ( b.x + b.r > WIDTH ) {
     b.x = WIDTH - b.r;
     b.vx = -Math.abs( b.vx );
+    playSound( 'bounce' );
   }
   if ( b.y - b.r < 0 ) {
     b.y = b.r;
     b.vy = Math.abs( b.vy );
+    playSound( 'bounce' );
   }
   enforceMinVertical( b );
 
@@ -154,7 +195,11 @@ function collideBallBlocks() {
     if ( block.hp <= 0 ) {
       block.alive = false;
       state.score += block.color === 'gray' ? SCORE_GRAY : SCORE_COLOR;
+      state.explosions.push( { x: block.x, y: block.y, color: block.color, start: gameTime } );
+      playSound( 'break' );
       if ( state.blocks.every( bl => !bl.alive ) ) state.screen = 'won';
+    } else {
+      playSound( 'bounce' );
     }
     break;  // un bloque por frame evita dobles rebotes
   }
@@ -182,6 +227,7 @@ function collideBallPaddle() {
   b.vx = b.speed * Math.sin( angle );
   b.vy = -b.speed * Math.cos( angle );
   b.y = p.y - b.r;
+  playSound( 'bounce' );
 }
 
 function updatePaddle( dt ) {
@@ -199,6 +245,7 @@ function draw() {
     drawTitle();
   } else {
     drawBlocks();
+    drawExplosions();
     drawPaddle();
     drawBall();
     drawHud();
@@ -239,8 +286,20 @@ function drawHud() {
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   ctx.fillText( 'Puntos: ' + state.score, 12, 24 );
-  ctx.textAlign = 'right';
-  ctx.fillText( 'Vidas: ' + state.lives, WIDTH - 12, 24 );
+  // Un corazón por vida restante, alineados a la derecha
+  for ( let i = 0; i < state.lives; i++ ) {
+    drawHeart( WIDTH - 12 - HEART_SIZE - i * ( HEART_SIZE + 6 ), 24 - HEART_SIZE / 2, HEART_SIZE );
+  }
+}
+
+function drawHeart( x, y, size ) {
+  const s = size / 2;
+  ctx.fillStyle = '#e63946';
+  ctx.beginPath();
+  ctx.moveTo( x + s, y + size );
+  ctx.bezierCurveTo( x - size * 0.2, y + size * 0.55, x + size * 0.1, y - size * 0.1, x + s, y + size * 0.3 );
+  ctx.bezierCurveTo( x + size * 0.9, y - size * 0.1, x + size * 1.2, y + size * 0.55, x + s, y + size );
+  ctx.fill();
 }
 
 function drawBlocks() {
@@ -252,6 +311,15 @@ function drawBlocks() {
 function drawBall() {
   const b = state.ball;
   drawSprite( ctx, 'ball', b.x - b.r, b.y - b.r, b.r * 2, b.r * 2 );
+}
+
+function drawExplosions() {
+  for ( const ex of state.explosions ) {
+    const frames = EXPLOSION_FRAMES[ ex.color ];
+    const progress = ( gameTime - ex.start ) / EXPLOSION_DURATION;
+    const i = Math.min( frames.length - 1, Math.floor( progress * frames.length ) );
+    drawFrame( ctx, frames[ i ], ex.x, ex.y, BLOCK_W, BLOCK_H );
+  }
 }
 
 function drawPaddle() {
